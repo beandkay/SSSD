@@ -191,8 +191,8 @@ if __name__ == "__main__":
             batch_size = inputs_l.shape[0]
             t_images = torch.cat((inputs_l, inputs_uw, inputs_us))
             t_logits, t_feature_logits = net(t_images)
-            t_logits_l = t_logits[:batch_size]
-            t_logits_uw, t_logits_us = t_logits[batch_size:].chunk(2)
+            t_logits_l = t_logits[-1][:batch_size]
+            t_logits_uw, t_logits_us = t_logits[-1][batch_size:].chunk(2)
             del t_logits
 
             t_loss_l = criterion(t_logits_l, labels)
