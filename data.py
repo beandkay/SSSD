@@ -31,23 +31,23 @@ def get_cifar10(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
     ])
-    base_dataset = datasets.CIFAR10(args.data_path, train=True, download=True)
+    base_dataset = datasets.CIFAR10(args.dataset_path, train=True, download=True)
 
     train_labeled_idxs, train_unlabeled_idxs = x_u_split(args, base_dataset.targets)
     # train_labeled_idxs, train_unlabeled_idxs = x_u_split_test(args, base_dataset.targets)
 
     train_labeled_dataset = CIFAR10SSL(
-        args.data_path, train_labeled_idxs, train=True,
+        args.dataset_path, train_labeled_idxs, train=True,
         transform=transform_labeled
     )
 
     train_unlabeled_dataset = CIFAR10SSL(
-        args.data_path, train_unlabeled_idxs,
+        args.dataset_path, train_unlabeled_idxs,
         train=True,
         transform=TransformMPL(args, mean=cifar10_mean, std=cifar10_std)
     )
 
-    test_dataset = datasets.CIFAR10(args.data_path, train=False,
+    test_dataset = datasets.CIFAR10(args.dataset_path, train=False,
                                     transform=transform_val, download=False)
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset
@@ -67,21 +67,21 @@ def get_cifar100(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=cifar100_mean, std=cifar100_std)])
 
-    base_dataset = datasets.CIFAR100(args.data_path, train=True, download=True)
+    base_dataset = datasets.CIFAR100(args.dataset_path, train=True, download=True)
 
     train_labeled_idxs, train_unlabeled_idxs = x_u_split(args, base_dataset.targets)
 
     train_labeled_dataset = CIFAR100SSL(
-        args.data_path, train_labeled_idxs, train=True,
+        args.dataset_path, train_labeled_idxs, train=True,
         transform=transform_labeled
     )
 
     train_unlabeled_dataset = CIFAR100SSL(
-        args.data_path, train_unlabeled_idxs, train=True,
+        args.dataset_path, train_unlabeled_idxs, train=True,
         transform=TransformMPL(args, mean=cifar100_mean, std=cifar100_std)
     )
 
-    test_dataset = datasets.CIFAR100(args.data_path, train=False,
+    test_dataset = datasets.CIFAR100(args.dataset_path, train=False,
                                      transform=transform_val, download=False)
 
     return train_labeled_dataset, train_unlabeled_dataset, test_dataset
