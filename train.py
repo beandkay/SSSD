@@ -25,7 +25,7 @@ parser.add_argument('--eval-step', default=1000, type=int, help='number of eval 
 parser.add_argument('--start-step', default=0, type=int,
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--workers', default=4, type=int, help='number of workers')
-parser.add_argument('--num-classes', default=10, type=int, help='number of classes')
+parser.add_argument('--num-classes', default=100, type=int, help='number of classes')
 parser.add_argument('--resize', default=32, type=int, help='resize image')
 parser.add_argument('--batch-size', default=64, type=int, help='train batch size')
 parser.add_argument('--epoch', default=250, type=int, help="training epochs")
@@ -38,6 +38,7 @@ parser.add_argument('--init_lr', default=0.1, type=float)
 parser.add_argument('--mu', default=7, type=int, help='coefficient of unlabeled batch size')
 parser.add_argument('--threshold', default=0.95, type=float, help='pseudo label threshold')
 parser.add_argument('--lambda-u', default=1, type=float, help='coefficient of unlabeled loss')
+parser.add_argument('--uda-steps', default=1, type=float, help='warmup steps of lambda-u')
 parser.add_argument("--randaug", nargs="+", type=int, help="use it like this. --randaug 2 10")
 parser.add_argument('--seed', default=None, type=int, help='seed for initializing training')
 parser.add_argument('--world-size', default=-1, type=int,
@@ -191,9 +192,9 @@ if __name__ == "__main__":
             batch_size = inputs_l.shape[0]
             t_images = torch.cat((inputs_l, inputs_uw, inputs_us))
             t_logits, t_feature_logits = net(t_images)
-            t_logits_l = t_logits[-1][:batch_size]
-            t_logits_uw, t_logits_us = t_logits[-1][batch_size:].chunk(2)
-            del t_logits
+            t_logits_l = t_logits[0][:batch_size]
+            t_logits_uw, t_logits_us = t_logits[0][batch_size:].chunk(2)
+            # del t_logits
 
             t_loss_l = criterion(t_logits_l, labels)
 
@@ -203,19 +204,19 @@ if __name__ == "__main__":
             t_loss_u = torch.mean(
                 -(soft_pseudo_label * torch.log_softmax(t_logits_us, dim=-1)).sum(dim=-1) * mask
             )
-            weight_u = args.lambda_u * min(1., ((i*args.batch_size)+1) / (epoch*args.batch_size))
+            weight_u = args.lambda_u * min(1., (((i+1)*batch_size)+1) / args.uda_steps)
             t_loss_uda = t_loss_l + weight_u * t_loss_u
 
             s_images = torch.cat((inputs_l, inputs_us))
             s_logits, s_feature_logits = net(s_images)
-            s_logits_l = s_logits[-1][:batch_size]
-            s_logits_us = s_logits[-1][batch_size:]
+            s_logits_l = s_logits[0][:batch_size]
+            s_logits_us = s_logits[0][batch_size:]
             del s_logits, s_feature_logits
 
             s_loss_l_old = F.cross_entropy(s_logits_l.detach(), labels)
             s_loss = criterion(s_logits_us, hard_pseudo_label)
 
-            ensemble = sum(t_logits[:-1])/len(t_logits)
+            ensemble = sum(t_logits)/len(t_logits)
             ensemble.detach_()
 
             if init is False:
@@ -235,25 +236,29 @@ if __name__ == "__main__":
                 init = True
 
             #   compute loss
-            loss = torch.FloatTensor([0.]).to(device)
+            loss_old = torch.FloatTensor([0.]).to(device)
+            loss_old += s_loss.item()
 
-            teacher_output = t_logits[0].detach()
-            teacher_feature = t_feature_logits[0].detach()
+            teacher_output = t_logits_l.detach()
+            teacher_feature = t_feature_logits[0][:batch_size].detach()
 
             #   for shallow classifiers
             for index in range(1, len(t_logits)):
                 #   logits distillation
-                loss += CrossEntropy(t_logits[index], teacher_output) * args.loss_coefficient
-                loss += criterion(t_logits[index], labels) * (1 - args.loss_coefficient)
+                loss_old += CrossEntropy(t_logits[index][:batch_size], teacher_output) * args.loss_coefficient
+                loss_old += criterion(t_logits_l[index][:batch_size], labels) * (1 - args.loss_coefficient)
                 #   feature distillation
                 if index != 1:
-                    loss += torch.dist(net.adaptation_layers[index-1](t_feature_logits[index]), teacher_feature) * \
+                    loss_old += torch.dist(net.adaptation_layers[index-1](t_feature_logits[index][:batch_size]), teacher_feature) * \
                             args.feature_loss_coefficient
                     #   the feature distillation loss will not be applied to the shallowest classifier
 
+            loss_old.backward()
+            optimizer.step()
+
             with torch.no_grad():
-                s_logits_l = net(images_l)
-                s_loss_l_new = F.cross_entropy(s_logits_l.detach(), labels)
+                s_logits_l, s_features_logits_l = net(inputs_l)
+                s_loss_l_new = F.cross_entropy(s_logits_l[0].detach(), labels)
                 # dot_product = s_loss_l_new - s_loss_l_old
                 # test
                 dot_product = s_loss_l_old - s_loss_l_new
@@ -263,21 +268,34 @@ if __name__ == "__main__":
                 t_loss_mpl = dot_product * F.cross_entropy(t_logits_us, hard_pseudo_label)
                 t_loss = t_loss_uda + t_loss_mpl
 
-            sum_loss += loss.item()
-            sum_loss += t_loss
-            optimizer.zero_grad()
-            loss.backward()
+            loss_new = torch.FloatTensor([0.]).to(device)
+            loss_new += t_loss.item()
+
+            for index in range(1, len(t_logits)):
+                #   logits distillation
+                loss_new += CrossEntropy(t_logits[index][:batch_size], teacher_output) * args.loss_coefficient
+                loss_new += criterion(t_logits_l[index][:batch_size], labels) * (1 - args.loss_coefficient)
+                #   feature distillation
+                if index != 1:
+                    loss_new += torch.dist(net.adaptation_layers[index-1](t_feature_logits[index][:batch_size]), teacher_feature) * \
+                            args.feature_loss_coefficient
+                    #   the feature distillation loss will not be applied to the shallowest classifier
+
+            loss_new.backward()
             optimizer.step()
+
+            sum_loss += loss_new
+            optimizer.zero_grad()
             net.zero_grad()
             total += float(labels.size(0))
             t_logits.append(ensemble)
 
-            for classifier_index in range(len(outputs)):
-                _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
-                correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
-            if epoch % 100 == 0:
+            for classifier_index in range(len(t_logits)):
+                _, predicted[classifier_index] = torch.max(t_logits[classifier_index].data, 1)
+                correct[classifier_index] += float(predicted[classifier_index][:batch_size].eq(labels.data).cpu().sum())
+            if i % 100 == 0:
                 print('[epoch:%d, iter:%d] Loss: %.03f | Acc: 4/4: %.2f%% 3/4: %.2f%% 2/4: %.2f%%  1/4: %.2f%%'
-                    ' Ensemble: %.2f%%' % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1),
+                    ' Ensemble: %.2f%%\n' % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1),
                                             100 * correct[0] / total, 100 * correct[1] / total,
                                             100 * correct[2] / total, 100 * correct[3] / total,
                                             100 * correct[4] / total))
@@ -299,13 +317,13 @@ if __name__ == "__main__":
                     correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
                 total += float(labels.size(0))
 
-            print('Test Set AccuracyAcc: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
-                  ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
+            print('Test Set Accuracy: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
+                  ' Ensemble: %.4f%%\n' % (100 * correct[0] / total, 100 * correct[1] / total,
                                          100 * correct[2] / total, 100 * correct[3] / total,
                                          100 * correct[4] / total))
             if correct[4] / total > best_acc:
                 best_acc = correct[4]/total
-                print("Best Accuracy Updated: ", best_acc * 100)
+                print("Best Accuracy Updated: \n", best_acc * 100)
                 torch.save(net.state_dict(), "./checkpoints/"+str(args.model)+".pth")
 
     print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.3f" % (args.epoch, best_acc))
