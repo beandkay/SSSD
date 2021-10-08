@@ -246,7 +246,7 @@ if __name__ == "__main__":
             for index in range(1, len(t_logits)):
                 #   logits distillation
                 loss_old += CrossEntropy(t_logits[index][:batch_size], teacher_output) * args.loss_coefficient
-                loss_old += criterion(t_logits_l[index][:batch_size], labels) * (1 - args.loss_coefficient)
+                loss_old += criterion(t_logits[index][:batch_size], labels) * (1 - args.loss_coefficient)
                 #   feature distillation
                 if index != 1:
                     loss_old += torch.dist(net.adaptation_layers[index-1](t_feature_logits[index][:batch_size]), teacher_feature) * \
@@ -258,26 +258,29 @@ if __name__ == "__main__":
 
             with torch.no_grad():
                 s_logits_l, s_features_logits_l = net(inputs_l)
-                s_loss_l_new = F.cross_entropy(s_logits_l[0].detach(), labels)
-                # dot_product = s_loss_l_new - s_loss_l_old
-                # test
-                dot_product = s_loss_l_old - s_loss_l_new
-                # moving_dot_product = moving_dot_product * 0.99 + dot_product * 0.01
-                # dot_product = dot_product - moving_dot_product
-                _, hard_pseudo_label = torch.max(t_logits_us.detach(), dim=-1)
-                t_loss_mpl = dot_product * F.cross_entropy(t_logits_us, hard_pseudo_label)
-                t_loss = t_loss_uda + t_loss_mpl
+            s_loss_l_new = F.cross_entropy(s_logits_l[0].detach(), labels)
+            # dot_product = s_loss_l_new - s_loss_l_old
+            # test
+            dot_product = s_loss_l_old - s_loss_l_new
+            # moving_dot_product = moving_dot_product * 0.99 + dot_product * 0.01
+            # dot_product = dot_product - moving_dot_product
+            _, hard_pseudo_label = torch.max(t_logits_us.detach(), dim=-1)
+            t_loss_mpl = dot_product * F.cross_entropy(t_logits_us, hard_pseudo_label)
+            t_loss = t_loss_uda + t_loss_mpl
 
             loss_new = torch.FloatTensor([0.]).to(device)
             loss_new += t_loss.item()
 
+            student_output = s_logits_l[0][:batch_size].detach()
+            student_feature = s_features_logits_l[0][:batch_size].detach()
+
             for index in range(1, len(t_logits)):
                 #   logits distillation
-                loss_new += CrossEntropy(t_logits[index][:batch_size], teacher_output) * args.loss_coefficient
-                loss_new += criterion(t_logits_l[index][:batch_size], labels) * (1 - args.loss_coefficient)
+                loss_new += CrossEntropy(s_logits_l[index][:batch_size], student_output) * args.loss_coefficient
+                loss_new += criterion(s_logits_l[index][:batch_size], labels) * (1 - args.loss_coefficient)
                 #   feature distillation
                 if index != 1:
-                    loss_new += torch.dist(net.adaptation_layers[index-1](t_feature_logits[index][:batch_size]), teacher_feature) * \
+                    loss_new += torch.dist(net.adaptation_layers[index-1](s_features_logits_l[index][:batch_size]), student_feature) * \
                             args.feature_loss_coefficient
                     #   the feature distillation loss will not be applied to the shallowest classifier
 
