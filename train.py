@@ -203,14 +203,14 @@ if __name__ == "__main__":
             t_loss_u = torch.mean(
                 -(soft_pseudo_label * torch.log_softmax(t_logits_us, dim=-1)).sum(dim=-1) * mask
             )
-            weight_u = args.lambda_u * min(1., (step+1) / args.uda_steps)
+            weight_u = args.lambda_u * min(1., ((i*args.batch_size)+1) / (epoch*args.batch_size))
             t_loss_uda = t_loss_l + weight_u * t_loss_u
 
             s_images = torch.cat((inputs_l, inputs_us))
-            s_logits = net(s_images)
-            s_logits_l = s_logits[:batch_size]
-            s_logits_us = s_logits[batch_size:]
-            del s_logits
+            s_logits, s_feature_logits = net(s_images)
+            s_logits_l = s_logits[-1][:batch_size]
+            s_logits_us = s_logits[-1][batch_size:]
+            del s_logits, s_feature_logits
 
             s_loss_l_old = F.cross_entropy(s_logits_l.detach(), labels)
             s_loss = criterion(s_logits_us, hard_pseudo_label)
